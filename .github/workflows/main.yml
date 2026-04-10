@@ -1,0 +1,28 @@
+name: Daily Stock Data Fetch
+on:
+  schedule:
+    - cron: '30 7 * * 1-5' # UTC时间 7:30 是北京时间 15:30
+  workflow_dispatch: # 支持手动触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: pip install pandas akshare tickflow
+      - name: Run fetch script
+        env:
+          TICKFLOW_API_KEY: ${{ secrets.TICKFLOW_API_KEY }}
+        run: python daily_fetch.py
+      - name: Commit and Push
+        run: |
+          git config --global user.name "actions-user"
+          git config --global user.email "actions@github.com"
+          git add data.csv
+          git commit -m "Auto update data.csv" || exit 0
+          git push
