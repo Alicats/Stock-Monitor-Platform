@@ -16,7 +16,8 @@ STOCK_POOL = {
     # "600036.SH": {"name": "招商银行", "type": "stock", "calc_dy": True},
 }
 
-tf = TickFlow(api_key="tk_81a9c96173cd4a1c889595fdc2822520")
+api_key = os.getenv("TICKFLOW_API_KEY")
+tf = TickFlow(api_key=api_key)
 
 
 def get_macd_status_left(dif, dea, hist, prev_hist):
