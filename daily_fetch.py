@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import akshare as ak
 import time
+import re
 from tickflow import TickFlow
 # 导入你原始代码中的计算逻辑 (calculate_rsi, get_macd_status_left, get_stock_data 等)
 # 此处省略重复逻辑，建议将 get_stock_data 里的 API Key 设为环境变量
@@ -16,7 +17,8 @@ STOCK_POOL = {
     # "600036.SH": {"name": "招商银行", "type": "stock", "calc_dy": True},
 }
 
-api_key = os.getenv("TICKFLOW_API_KEY")
+# api_key = os.getenv("TICKFLOW_API_KEY")
+api_key = "tk_81a9c96173cd4a1c889595fdc2822520"
 tf = TickFlow(api_key=api_key)
 
 
@@ -39,6 +41,7 @@ def get_macd_status_left(dif, dea, hist, prev_hist):
         return f"✘ ({hist:.3f} 多头)", 5
     else:
         return f"✘ ({hist:.3f} 寻底)", 0
+
 
 def calculate_score(data_dict):
     """
@@ -116,13 +119,13 @@ def get_rsi_status(val):
     else: status = "中性"
     return f"{symbol} ({val:.2f} {status})"
 
-
-
 # ==========================================
 # 2. 核心数据获取
 # ==========================================
 def get_stock_data(symbol, info):
     name = info["name"]
+    asset_type = info["type"]
+    should_calc_dy = info["calc_dy"]
     try:
         # 日线数据
         df_daily = tf.klines.get(symbol, period="1d", count=300, adjust="forward_additive", as_dataframe=True)
@@ -150,9 +153,19 @@ def get_stock_data(symbol, info):
         day_macd_text, day_macd_pts = get_macd_status_left(last_d['dif'], last_d['dea'], last_d['macd_hist'], prev_d['macd_hist'])
         week_macd_text, week_macd_pts = get_macd_status_left(last_w['dif'], last_w['dea'], last_w['macd_hist'], prev_w['macd_hist'])
 
+        # 股息率指标
+        dy_display = "N/A"
+        if should_calc_dy:
+            if asset_type == "stock":
+                close_price = last_d['close']
+                dy_val = calculate_stock_dividend(symbol, close_price)
+            else: # etf
+                dy_val = calculate_etf_dividend(symbol)
+            dy_display = f"{dy_val:.2f}%"
+
         res = {
             "代码": symbol, "名称": name, "收盘价": f"{cp:.3f}",
-            "股息率": f"{calculate_stock_dividend(symbol, cp):.2f}%" if info["calc_dy"] else "N/A",
+            "股息率": dy_display,
             "120日线": f"{'✔' if cp < last_d['MA120'] else '✘'} ({last_d['MA120']:.2f})",
             "250日线": f"{'✔' if cp < last_d['MA250'] else '✘'} ({last_d['MA250']:.2f})",
             "日中下轨": f"{'✔' if cp < last_d['boll_mid'] else '✘'} ({last_d['boll_mid']:.2f}-{last_d['boll_low']:.2f})",
@@ -178,6 +191,8 @@ def run_daily_task():
         if data: results.append(data)
         time.sleep(12)
     
+    print(results)
+
     df = pd.DataFrame(results)
     df.to_csv("data.csv", index=False, encoding="utf-8-sig")
     print("Data saved to data.csv")

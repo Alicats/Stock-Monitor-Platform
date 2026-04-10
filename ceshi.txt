@@ -1,0 +1,171 @@
+import streamlit as st
+import pandas as pd
+import time
+
+# 页面配置
+st.set_page_config(page_title="多因子安全边际监控", layout="wide")
+
+# --- 1. 样式处理工具函数 ---
+def format_indicator(val):
+    """指标分行：调大图标和描述文字"""
+    if not isinstance(val, str) or '(' not in val:
+        return f"<div style='text-align:center; font-size: 18px;'>{val}</div>"
+    
+    symbol = val.split('(')[0].strip()
+    description = val.split('(')[1].replace(')', '').strip()
+    color = "#ff4b4b" if "✘" in symbol else "#29b09d"
+    
+    return f"""
+    <div style="text-align: center; line-height: 1.2;">
+        <div style="color: {color}; font-size: 24px; font-weight: bold;">{symbol}</div>
+        <div style="color: #808495; font-size: 14px; font-family: sans-serif;">{description}</div>
+    </div>
+    """
+
+def format_price_dividend(price, dy):
+    """现价与股息分行：调大现价和股息率"""
+    return f"""
+    <div style="text-align: center; line-height: 1.4;">
+        <div style="color: #31333F; font-size: 18px; font-weight: bold;">{price}</div>
+        <div style="color: #f39c12; font-size: 13px; font-weight: 500;">{dy}</div>
+    </div>
+    """
+
+# --- 2. 逻辑函数 ---
+def chan_analysis(symbol):
+    time.sleep(1) # 模拟分析耗时
+    return f"【缠论分析报告 - {symbol}】\n级别：日线\n结构：走势中枢形成中...\n建议：关注三买机会。"
+
+@st.cache_data(ttl=3600)
+def load_csv_data():
+    try:
+        df = pd.read_csv("data.csv")
+        if "评分" in df.columns:
+            df = df.sort_values("评分", ascending=False)
+        return df
+    except:
+        return pd.DataFrame()
+
+def fetch_realtime_data(symbol):
+    st.info(f"正在实时抓取 {symbol} 数据...")
+    return {
+        "代码": symbol, "名称": "实时查询", "评分": 88, "收盘价": "10.24", "股息率": "5.21%",
+        "120日线": "✔ (9.50)", "250日线": "✘ (11.20)", "日中下轨": "✔ (10.10)",
+        "周中下轨": "✔ (9.80)", "12日RSI": "✔ (32.5)", "6周RSI": "✘ (55.0)",
+        "日MACD": "✔ (金叉)", "周MACD": "✘ (寻底)"
+    }
+
+# --- 3. UI 布局 ---
+st.title("📊 股票多因子安全边际监控")
+
+# 固定资产池
+FIXED_POOL = ["601988.SH"]
+
+# 顶部交互区
+col_select, col_search = st.columns([2, 1])
+
+with col_select:
+    selected_stock = st.selectbox("🎯 快速选择池内标的 (CSV预加载)", ["请选择..."] + FIXED_POOL)
+
+with col_search:
+    search_stock = st.text_input("🔍 搜索新代码 (实时拉取)", placeholder="例如: 000001.SZ")
+
+# --- 4. 重点展示区 (搜索或选择的结果) ---
+display_df = load_csv_data()
+target_data = None
+
+# 决策展示哪个数据
+if search_stock:
+    target_data = fetch_realtime_data(search_stock)
+elif selected_stock != "请选择...":
+    if not display_df.empty:
+        match = display_df[display_df["代码"] == selected_stock]
+        if not match.empty:
+            target_data = match.iloc[0].to_dict()
+
+# 如果有选中的目标，单独弹出一个精美的展示卡片
+if target_data:
+    with st.container():
+        st.markdown(f"### 🎯 当前聚焦：{target_data['名称']} ({target_data['代码']})")
+        cols = st.columns(len(target_data) - 2) # 动态列
+        # 这里可以根据需要展示核心指标，或者直接复用下方的表格逻辑
+        st.success(f"该标的当前综合评分：{target_data['评分']}。点击下方列表中的‘📝’可查看深度分析。")
+        st.divider()
+
+# --- 5. 全量监控清单 (你要求的优化样式表格) ---
+if not display_df.empty:
+    st.subheader("📋 全量监控清单 (降序)")
+    
+    # 列宽比例调整
+    headers = ["代码/名称", "评分", "现价/股息", "120日", "250日", "日布林", "周布林", "12D-RSI", "6W-RSI", "日MACD", "周MACD", "分析"]
+    col_ratios = [1.5, 0.7, 1.2, 1, 1, 1.1, 1.1, 1.2, 1.2, 1.2, 1.2, 0.8]
+    # 渲染表头
+    h_cols = st.columns(col_ratios)
+    for col, h in zip(h_cols, headers):
+        # 使用 class='header-text' 应用调大的字体样式
+        col.markdown(f"<p class='header-text'>{h}</p>", unsafe_allow_html=True)
+
+    st.divider()
+
+    for idx, row in display_df.iterrows():
+        # 如果是选中的行，增加视觉反馈
+        is_selected = (row['代码'] == selected_stock)
+        
+        r_cols = st.columns(col_ratios)
+        
+        # 1. 标的信息
+        r_cols[0].markdown(f"**{row['代码']}**<br><span style='color:gray; font-size:12px;'>{row['名称']}</span>", unsafe_allow_html=True)
+        
+        # 2. 评分
+        r_cols[1].markdown(f"<h3 style='text-align: center; margin:0; color:#1E88E5;'>{row['评分']}</h3>", unsafe_allow_html=True)
+        
+        # 3. 现价/股息 (核心修改点)
+        price_val = row.get('收盘价', '-')
+        dy_val = row.get('股息率', 'N/A')
+        r_cols[2].markdown(format_price_dividend(price_val, dy_val), unsafe_allow_html=True)
+        
+        # 4-11. 其它指标
+        indicator_fields = ['120日线', '250日线', '日中下轨', '周中下轨', '12日RSI', '6周RSI', '日MACD', '周MACD']
+        for i, field in enumerate(indicator_fields):
+            val = str(row[field]) if field in row else "-"
+            r_cols[i+3].markdown(format_indicator(val), unsafe_allow_html=True)
+        
+        # 12. 分析按钮
+        if r_cols[11].button("📝", key=f"btn_{row['代码']}"):
+            with st.expander(f"📖 {row['名称']} 深度分析", expanded=True):
+                st.info(chan_analysis(row['代码']))
+
+    # 注入 CSS
+    st.markdown("""
+        <style>
+        /* 1. 调大表头字体 */
+        .header-text {
+            color: #808495;
+            font-weight: bold;
+            text-align: center;
+            font-size: 16px !important;  /* 从13px调大到16px */
+        }
+
+        /* 2. 调大列内容的垂直居中和间距 */
+        div[data-testid="stHorizontalBlock"] {
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid #f0f2f6;
+        }
+
+        /* 3. 调大普通 Markdown 文字大小 */
+        div[data-testid="stMarkdownContainer"] p {
+            font-size: 16px !important;
+            margin-bottom: 0;
+        }
+
+        /* 4. 调大按钮内部图标大小 */
+        .stButton>button {
+            font-size: 20px !important;
+            height: 45px;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+else:
+    st.warning("暂无数据，请检查 data.csv 是否存在。")
