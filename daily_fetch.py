@@ -45,14 +45,16 @@ def get_macd_status_left(dif, dea, hist, prev_hist):
     is_gold_cross = prev_hist <= 0 and hist > 0
     is_shortening = hist < 0 and hist > prev_hist
     
+    res = None
     if is_underwater and is_gold_cross:
-        return f"✔✔ ({hist:.3f} 水下金叉)", 15  # 评分权重 15
+        res = f"✔✔ ({hist:.3f} 水下金叉)", 15
     elif is_underwater and is_shortening:
-        return f"✔ ({hist:.3f} 绿色柱缩短)", 10  # 评分权重 10
+        res = f"✔ ({hist:.3f} 绿色柱缩短)", 10
     elif hist > 0:
-        return f"✘ ({hist:.3f} 多头)", 5
+        res = f"✘ ({hist:.3f} 多头)", 5
     else:
-        return f"✘ ({hist:.3f} 寻底)", 0
+        res = f"✘ ({hist:.3f} 寻底)", 0
+    return res
 
 
 def calculate_score(data_dict):
@@ -82,10 +84,12 @@ def extract_dividend_per_share(text):
     return 0.0
 
 def calculate_stock_dividend(symbol: str, close_price: float) -> float:
+    start_time = time.perf_counter()
     try:
         clean_symbol = symbol.split('.')[0]
         df = ak.stock_fhps_detail_em(symbol=clean_symbol)
         if df.empty: return 0.0
+
         df['现金分红-现金分红比例描述'] = df['现金分红-现金分红比例描述'].astype(str)
         df['最新公告日期'] = df['最新公告日期'].astype(str)
         valid_df = df[df['现金分红-现金分红比例描述'].str.contains('10派', na=False)].copy()
@@ -96,6 +100,9 @@ def calculate_stock_dividend(symbol: str, close_price: float) -> float:
         recent_df = valid_df.tail(2).copy()
         recent_df['每股分红'] = recent_df['现金分红-现金分红比例描述'].apply(extract_dividend_per_share)
         total_dividend = recent_df['每股分红'].sum()
+        
+        elapsed = time.perf_counter() - start_time
+        print(f"  [Timer] Akshare股票分红接口耗时 ({symbol}): {elapsed:.2f}s")
         return round((total_dividend / close_price) * 100, 4)   
     except: return 0.0
 
@@ -104,12 +111,16 @@ def extract_dividend(value):
     return float(match.group(1)) if match else 0.0
 
 def calculate_etf_dividend(symbol: str):
+    start_time = time.perf_counter()
     try:
         clean_symbol = symbol.split('.')[0]
         hongli_jing_em_df = ak.fund_open_fund_info_em(symbol=clean_symbol, indicator="单位净值走势")
         latest_net_value = hongli_jing_em_df.tail(1)['单位净值'].values[0]
         hongli_fenhong_em_df = ak.fund_open_fund_info_em(symbol=clean_symbol, indicator="分红送配详情")
         total_dividend = hongli_fenhong_em_df.head(12)["每份分红"].apply(extract_dividend).sum()
+       
+        elapsed = time.perf_counter() - start_time
+        print(f"  [Timer] Akshare ETF分红接口耗时 ({symbol}): {elapsed:.2f}s")
         return round((total_dividend / latest_net_value) * 100, 4)
     except: return 0.0
 
@@ -138,12 +149,19 @@ def get_stock_data(symbol, info):
     name = info["name"]
     asset_type = info["type"]
     should_calc_dy = info["calc_dy"]
+    total_start = time.perf_counter()
+
     try:
+        kf_start = time.perf_counter()
+        # 1. TickFlow K线获取耗时
         # 日线数据
         df_daily = tf.klines.get(symbol, period="1d", count=300, adjust="forward_additive", as_dataframe=True)
         # 周线数据
         df_weekly = tf.klines.get(symbol, period="1w", count=300, adjust="forward_additive", as_dataframe=True)
-        
+        print(f"  [Timer] TickFlow K线下载耗时: {time.perf_counter() - kf_start:.2f}s")
+
+        # 2. 技术指标计算耗时 (MA/BOLL/MACD/RSI)
+        calc_start = time.perf_counter()
         for df in [df_daily, df_weekly]:
             df["MA120"] = df["close"].rolling(120).mean()
             df["MA250"] = df["close"].rolling(250).mean()
@@ -154,6 +172,7 @@ def get_stock_data(symbol, info):
             df['dif'] = ema12 - ema26
             df['dea'] = df['dif'].ewm(span=9, adjust=False).mean()
             df['macd_hist'] = (df['dif'] - df['dea']) * 2
+        print(f"  [Timer] Pandas 技术指标计算耗时: {time.perf_counter() - calc_start:.4f}s")
 
         last_d = df_daily.iloc[-1]
         prev_d = df_daily.iloc[-2]
@@ -161,10 +180,12 @@ def get_stock_data(symbol, info):
         prev_w = df_weekly.iloc[-2]
         cp = last_d['close']
 
+
         # 获取左侧 MACD 状态
         day_macd_text, day_macd_pts = get_macd_status_left(last_d['dif'], last_d['dea'], last_d['macd_hist'], prev_d['macd_hist'])
         week_macd_text, week_macd_pts = get_macd_status_left(last_w['dif'], last_w['dea'], last_w['macd_hist'], prev_w['macd_hist'])
 
+        # 3. 股息率获取耗时
         # 股息率指标
         dy_display = "N/A"
         if should_calc_dy:
@@ -176,7 +197,8 @@ def get_stock_data(symbol, info):
             dy_display = f"{dy_val:.2f}%"
 
         res = {
-            "代码": symbol, "名称": name, "收盘价": f"{cp:.3f}",
+            "代码": symbol, "名称": name, 
+            "收盘价": f"{cp:.3f}",
             "股息率": dy_display,
             "120日线": f"{'✔' if cp < last_d['MA120'] else '✘'} ({last_d['MA120']:.2f})",
             "250日线": f"{'✔' if cp < last_d['MA250'] else '✘'} ({last_d['MA250']:.2f})",
@@ -190,6 +212,7 @@ def get_stock_data(symbol, info):
             "_week_macd_score": week_macd_pts
         }
         res["评分"] = calculate_score(res)
+        print(f"  ✅ {name} 处理完成，总耗时: {time.perf_counter() - total_start:.2f}s")
         return res
     except Exception as e:
         print(f"Error {name}: {e}"); return None
@@ -197,13 +220,14 @@ def get_stock_data(symbol, info):
 
 def run_daily_task():
     # STOCK_POOL 定义...
+    start = time.perf_counter()
     results = []
     for symbol, info in STOCK_POOL.items():
         data = get_stock_data(symbol, info) # 使用你原始的计算函数
         if data: results.append(data)
         time.sleep(12)
     
-    print(results)
+    print(f"  股票分析完成耗时: {time.perf_counter() - start:.4f}s")
 
     df = pd.DataFrame(results)
     df.to_csv("data.csv", index=False, encoding="utf-8-sig")
