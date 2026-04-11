@@ -59,8 +59,8 @@ def fetch_realtime_data(symbol):
 # --- 3. UI 布局 ---
 st.title("📊 股票多因子安全边际监控")
 
-DEFAULT_SHOW = ["601988.SH"]  
-FIXED_POOL = ["513530.SH"]    
+DEFAULT_SHOW = ["601988.SH", "513530.SH", "159941.SZ", "600900.SH", "601318.SH", "600036.SH"]  
+FIXED_POOL = ["601066.SH", "600866.SH", "600750.SH", "600795.SH", "000651.SZ", "600941.SH", "601919.SH", "000858.SH", "600887.SH", "601985.SH", "003816.SZ", "000333.SZ", "000538.SZ"]    
 
 col_select, col_search = st.columns([2, 1])
 with col_select:
