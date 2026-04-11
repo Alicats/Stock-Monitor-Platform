@@ -4,17 +4,29 @@ import akshare as ak
 import time
 import re
 from tickflow import TickFlow
-# 导入你原始代码中的计算逻辑 (calculate_rsi, get_macd_status_left, get_stock_data 等)
-# 此处省略重复逻辑，建议将 get_stock_data 里的 API Key 设为环境变量
 
 
 STOCK_POOL = {
     "601988.SH": {"name": "中国银行", "type": "stock", "calc_dy": True},
     "513530.SH": {"name": "港股红利ETF", "type": "etf", "calc_dy": True},
-    # "601318.SH": {"name": "中国平安", "type": "stock", "calc_dy": True},
-    # "159941.SZ": {"name": "纳指ETF", "type": "etf", "calc_dy": False},
-    # "600900.SH": {"name": "长江电力", "type": "stock", "calc_dy": True},
-    # "600036.SH": {"name": "招商银行", "type": "stock", "calc_dy": True},
+    "159941.SZ": {"name": "纳指ETF", "type": "etf", "calc_dy": False},
+    "600900.SH": {"name": "长江电力", "type": "stock", "calc_dy": True},
+    "601066.SH": {"name": "中信建投", "type": "stock", "calc_dy": True},
+    "600866.SH": {"name": "国投电力", "type": "stock", "calc_dy": True},
+    "600750.SH": {"name": "华润江中", "type": "stock", "calc_dy": True},
+    "600795.SH": {"name": "国电电力", "type": "stock", "calc_dy": True},
+    "000651.SZ": {"name": "格力电器", "type": "stock", "calc_dy": True},
+    "600941.SH": {"name": "中国移动", "type": "stock", "calc_dy": True},
+    "601919.SH": {"name": "中远海控", "type": "stock", "calc_dy": True},
+    "000858.SH": {"name": "五粮液", "type": "stock", "calc_dy": True},
+    "600887.SH": {"name": "伊利股份", "type": "stock", "calc_dy": True},
+    "601985.SH": {"name": "中国核电", "type": "stock", "calc_dy": True},
+    "003816.SZ": {"name": "中国广核", "type": "stock", "calc_dy": True},
+    "601318.SH": {"name": "中国平安", "type": "stock", "calc_dy": True},
+    "000333.SZ": {"name": "美的集团", "type": "stock", "calc_dy": True},
+    "600036.SH": {"name": "招商银行", "type": "stock", "calc_dy": True},
+    "000538.SZ": {"name": "云南白药", "type": "stock", "calc_dy": True},
+     
 }
 
 # api_key = os.getenv("TICKFLOW_API_KEY")
