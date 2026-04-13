@@ -3,9 +3,12 @@ import pandas as pd
 import akshare as ak
 import time
 import re
+import datetime
 from tickflow import TickFlow
 from concurrent.futures import ThreadPoolExecutor
-import threading
+
+from quant_logic import calculate_stock_dividend
+print("导入成功！")
 
 STOCK_POOL = {
     "601988.SH": {"name": "中国银行", "type": "stock", "calc_dy": True},
@@ -19,7 +22,7 @@ STOCK_POOL = {
     "000651.SZ": {"name": "格力电器", "type": "stock", "calc_dy": True},
     "600941.SH": {"name": "中国移动", "type": "stock", "calc_dy": True},
     "601919.SH": {"name": "中远海控", "type": "stock", "calc_dy": True},
-    "000858.SH": {"name": "五粮液", "type": "stock", "calc_dy": True},
+    "000858.SZ": {"name": "五粮液", "type": "stock", "calc_dy": True},
     "600887.SH": {"name": "伊利股份", "type": "stock", "calc_dy": True},
     "601985.SH": {"name": "中国核电", "type": "stock", "calc_dy": True},
     "003816.SZ": {"name": "中国广核", "type": "stock", "calc_dy": True},
@@ -41,32 +44,45 @@ DIVIDEND_CACHE_FILE = "dividend_cache.csv"
 # 1. 新增：分红前置并行计算逻辑
 # ==========================================
 def preload_all_dividends():
-    """使用线程池预先计算所有股票的股息率"""
-    print("      正在预加载分红数据（并行模式）...")
+    """
+    预加载分红数据：
+    1. 检查缓存文件是否存在。
+    2. 检查缓存文件的修改日期是否为今天。
+    3. 如果是今天，则直接读取，不再请求接口，节省时间。
+    """
     start_time = time.perf_counter()
     
-    # 获取当前最新的收盘价（简易快照），用于计算股息率
-    # 这里我们只需要一个粗略的现价，可以用 akshare 快速获取
+    # --- 1. 检查缓存是否有效 (一天只跑一次) ---
+    if os.path.exists(DIVIDEND_CACHE_FILE):
+        # 获取文件最后修改时间
+        mtime = os.path.getmtime(DIVIDEND_CACHE_FILE)
+        print(f"      缓存文件最后修改时间: {datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')}")
+        modify_date = datetime.datetime.fromtimestamp(mtime).date()
+        today = datetime.date.today()
+        
+        if modify_date == today:
+            try:
+                df_cache = pd.read_csv(DIVIDEND_CACHE_FILE, encoding="utf-8-sig")
+                # 检查缓存是否为空（防止上次运行出错生成了空文件）
+                if not df_cache.empty:
+                    print(f"      🕒 检测到今日缓存已存在 ({modify_date})，直接加载。")
+                    return df_cache
+            except Exception as e:
+                print(f"      [!] 读取缓存失败，将重新计算: {e}")
+
+    # --- 2. 缓存无效或不存在，执行并行计算 ---
+    print("      正在预加载分红数据（并行模式/今日首次运行）...")
+    
     def get_single_dividend(item):
         # 获取当前工作的线程名称
-        thread_name = threading.current_thread().name
         symbol, info = item
         if not info["calc_dy"]: return None
-        
         try:
-            # 打印日志，显示哪个线程在处理哪只股票
-            print(f"      [Thread: {thread_name}] 正在处理: {symbol}")
-            
-            # 快速获取现价（不需要 300 行 K 线，只取最新一个值）
             if info["type"] == "stock":
-                val = calculate_stock_dividend(symbol)
-                label = "每股分红"
+                dy_val = calculate_stock_dividend(symbol)
             else:
-                val = calculate_etf_dividend(symbol)
-                label = "ETF股息率"
-            
-            print(f"      [!] 预加载 {symbol} 成功: {val}")
-            return {"代码": symbol, "数值": val, "类型": label}
+                dy_val = calculate_etf_dividend(symbol)
+            return {"代码": symbol, "股息率": dy_val}
         except Exception as e:
             print(f"      [!] 预加载 {symbol} 失败: {e}")
             return None
@@ -75,12 +91,16 @@ def preload_all_dividends():
     with ThreadPoolExecutor(max_workers=5) as executor:
         results = list(executor.map(get_single_dividend, STOCK_POOL.items()))
 
-    # 保存到本地 CSV
+    # --- 3. 保存计算结果 ---
     valid_results = [r for r in results if r]
-    df_cache = pd.DataFrame(valid_results)
-    df_cache.to_csv(DIVIDEND_CACHE_FILE, index=False, encoding="utf-8-sig")
-    print(f"      ✅ 分红预加载完成，耗时: {time.perf_counter() - start_time:.2f}s")
-    return df_cache
+    if valid_results:
+        df_cache = pd.DataFrame(valid_results)
+        df_cache.to_csv(DIVIDEND_CACHE_FILE, index=False, encoding="utf-8-sig")
+        print(f"      ✅ 分红数据已更新并缓存，耗时: {time.perf_counter() - start_time:.2f}s")
+        return df_cache
+    else:
+        print("      ⚠️ 未获取到任何有效分红数据")
+        return pd.DataFrame()
 
 def get_macd_status_left(dif, dea, hist, prev_hist):
     """
@@ -125,34 +145,16 @@ def calculate_score(data_dict):
     return score
 
 
-def extract_dividend_per_share(text):
-    if not isinstance(text, str) or text == 'nan': return 0.0
-    match = re.search(r'10派([\d\.]+)元', text)
-    if match: return float(match.group(1)) / 10.0
-    return 0.0
 
 def calculate_stock_dividend(symbol: str):
-    start_time = time.perf_counter()
     try:
-        clean_symbol = symbol.split('.')[0]
-        df = ak.stock_fhps_detail_em(symbol=clean_symbol)
-        if df.empty: return 0.0
-
-        df['现金分红-现金分红比例描述'] = df['现金分红-现金分红比例描述'].astype(str)
-        df['最新公告日期'] = df['最新公告日期'].astype(str)
-        valid_df = df[df['现金分红-现金分红比例描述'].str.contains('10派', na=False)].copy()
-        if valid_df.empty: return 0.0
-        if '报告期' in valid_df.columns:
-            valid_df = valid_df.sort_values('最新公告日期', ascending=True)
-            valid_df = valid_df.drop_duplicates(subset=['报告期'], keep='last')
-        recent_df = valid_df.tail(2).copy()
-        recent_df['每股分红'] = recent_df['现金分红-现金分红比例描述'].apply(extract_dividend_per_share)
-        total_dividend = recent_df['每股分红'].sum()
-        
-        elapsed = time.perf_counter() - start_time
-        print(f"  [Timer] Akshare股票分红接口耗时 ({symbol}): {elapsed:.2f}s : {total_dividend}")
-        return total_dividend;
-        # return round((total_dividend / close_price) * 100, 4)   
+        print(f"  开始计算 {symbol} 股息率(TTM)...")
+        # SH601988
+        target_symbol = symbol.split('.')[1] + symbol.split('.')[0]  
+        stock_individual_spot_xq_df = ak.stock_individual_spot_xq(symbol=target_symbol)
+        dividend = stock_individual_spot_xq_df.loc[stock_individual_spot_xq_df['item'] == '股息率(TTM)', 'value'].values[0]
+        print(f"  股票 {symbol} 股息率(TTM): {dividend}")
+        return dividend
     except: return 0.0
 
 def extract_dividend(value):
@@ -160,18 +162,17 @@ def extract_dividend(value):
     return float(match.group(1)) if match else 0.0
 
 def calculate_etf_dividend(symbol: str):
-    start_time = time.perf_counter()
     try:
         clean_symbol = symbol.split('.')[0]
         hongli_jing_em_df = ak.fund_open_fund_info_em(symbol=clean_symbol, indicator="单位净值走势")
         latest_net_value = hongli_jing_em_df.tail(1)['单位净值'].values[0]
         hongli_fenhong_em_df = ak.fund_open_fund_info_em(symbol=clean_symbol, indicator="分红送配详情")
         total_dividend = hongli_fenhong_em_df.head(12)["每份分红"].apply(extract_dividend).sum()
-       
-        elapsed = time.perf_counter() - start_time
-        print(f"  [Timer] Akshare ETF分红接口耗时 ({symbol}): {elapsed:.2f}s")
-        return round((total_dividend / latest_net_value) * 100, 4)
-    except: return 0.0
+        dividend = round((total_dividend / latest_net_value) * 100, 4)
+        print(f"  ETF {symbol} 股息率(TTM): {dividend}")
+        return dividend
+    except Exception as e:
+        print(f"Error {symbol}: {e}"); return None
 
 def calculate_rsi(series, period=12):
     delta = series.diff()
@@ -234,8 +235,7 @@ def get_stock_data(symbol, info, dividend_df=None):
         day_macd_text, day_macd_pts = get_macd_status_left(last_d['dif'], last_d['dea'], last_d['macd_hist'], prev_d['macd_hist'])
         week_macd_text, week_macd_pts = get_macd_status_left(last_w['dif'], last_w['dea'], last_w['macd_hist'], prev_w['macd_hist'])
 
-        # 3. 股息率获取耗时
-        # 股息率指标
+        # 3. 股息率指标
         dy_display = "N/A"
         if should_calc_dy:
             found_in_cache = False
@@ -245,15 +245,7 @@ def get_stock_data(symbol, info, dividend_df=None):
                 if not match.empty:
                     row = match.iloc[0]
                     # 从缓存中取出纯数字
-                    cached_val = float(row["数值"])
-
-                    if asset_type == "stock":
-                       # 股票：缓存的是每股分红，需要除以当前现价
-                        dy_val = round((cached_val / close_price) * 100, 4)
-                    else:     
-                        # ETF：缓存直接就是百分比
-                        dy_val = cached_val
-                    
+                    dy_val = float(row["股息率"])
                     dy_display = f"{dy_val:.2f}%"
                     found_in_cache = True
             
@@ -261,9 +253,7 @@ def get_stock_data(symbol, info, dividend_df=None):
                 # 兜底方案：实时查询
                 print(f"      [!] {name} 缓存失效，正在实时查询...")
                 if asset_type == "stock":
-                    close_price = last_d['close']
-                    total_dividend = calculate_stock_dividend(symbol)
-                    dy_val = round((total_dividend / close_price) * 100, 4)
+                    dy_val = calculate_stock_dividend(symbol)
                 else:
                     dy_val = calculate_etf_dividend(symbol)
                 dy_display = f"{dy_val:.2f}%"
@@ -300,11 +290,11 @@ def run_daily_task():
 
     # B. 串行处理 K 线数据（受 12 秒限制）
     results = []
-    for symbol, info in STOCK_POOL.items():
-        data = get_stock_data(symbol, info, dividend_df) # 使用你原始的计算函数
-        if data: results.append(data)
-        # 这里的 12 秒只针对 TickFlow 接口，由于分红已读缓存，循环变得非常清爽
-        time.sleep(12)
+    # for symbol, info in STOCK_POOL.items():
+    #     data = get_stock_data(symbol, info, dividend_df) # 使用你原始的计算函数
+    #     if data: results.append(data)
+    #     # 这里的 12 秒只针对 TickFlow 接口，由于分红已读缓存，循环变得非常清爽
+    #     time.sleep(12)
     
     print(f"  股票分析完成耗时: {time.perf_counter() - start:.4f}s")
 
