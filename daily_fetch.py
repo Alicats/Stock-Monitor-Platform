@@ -4,7 +4,8 @@ import akshare as ak
 import time
 import re
 from tickflow import TickFlow
-
+from concurrent.futures import ThreadPoolExecutor
+import threading
 
 STOCK_POOL = {
     "601988.SH": {"name": "中国银行", "type": "stock", "calc_dy": True},
@@ -12,7 +13,7 @@ STOCK_POOL = {
     "159941.SZ": {"name": "纳指ETF", "type": "etf", "calc_dy": False},
     "600900.SH": {"name": "长江电力", "type": "stock", "calc_dy": True},
     "601066.SH": {"name": "中信建投", "type": "stock", "calc_dy": True},
-    "600866.SH": {"name": "国投电力", "type": "stock", "calc_dy": True},
+    "600886.SH": {"name": "国投电力", "type": "stock", "calc_dy": True},
     "600750.SH": {"name": "华润江中", "type": "stock", "calc_dy": True},
     "600795.SH": {"name": "国电电力", "type": "stock", "calc_dy": True},
     "000651.SZ": {"name": "格力电器", "type": "stock", "calc_dy": True},
@@ -26,13 +27,60 @@ STOCK_POOL = {
     "000333.SZ": {"name": "美的集团", "type": "stock", "calc_dy": True},
     "600036.SH": {"name": "招商银行", "type": "stock", "calc_dy": True},
     "000538.SZ": {"name": "云南白药", "type": "stock", "calc_dy": True},
-     
 }
+
 
 # api_key = os.getenv("TICKFLOW_API_KEY")
 api_key = "tk_81a9c96173cd4a1c889595fdc2822520"
 tf = TickFlow(api_key=api_key)
 
+# 分红缓存文件
+DIVIDEND_CACHE_FILE = "dividend_cache.csv"
+
+# ==========================================
+# 1. 新增：分红前置并行计算逻辑
+# ==========================================
+def preload_all_dividends():
+    """使用线程池预先计算所有股票的股息率"""
+    print("      正在预加载分红数据（并行模式）...")
+    start_time = time.perf_counter()
+    
+    # 获取当前最新的收盘价（简易快照），用于计算股息率
+    # 这里我们只需要一个粗略的现价，可以用 akshare 快速获取
+    def get_single_dividend(item):
+        # 获取当前工作的线程名称
+        thread_name = threading.current_thread().name
+        symbol, info = item
+        if not info["calc_dy"]: return None
+        
+        try:
+            # 打印日志，显示哪个线程在处理哪只股票
+            print(f"      [Thread: {thread_name}] 正在处理: {symbol}")
+            
+            # 快速获取现价（不需要 300 行 K 线，只取最新一个值）
+            if info["type"] == "stock":
+                val = calculate_stock_dividend(symbol)
+                label = "每股分红"
+            else:
+                val = calculate_etf_dividend(symbol)
+                label = "ETF股息率"
+            
+            print(f"      [!] 预加载 {symbol} 成功: {val}")
+            return {"代码": symbol, "数值": val, "类型": label}
+        except Exception as e:
+            print(f"      [!] 预加载 {symbol} 失败: {e}")
+            return None
+
+    # 开启线程池（建议 5-10 个线程，不要太激进以免被封）
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        results = list(executor.map(get_single_dividend, STOCK_POOL.items()))
+
+    # 保存到本地 CSV
+    valid_results = [r for r in results if r]
+    df_cache = pd.DataFrame(valid_results)
+    df_cache.to_csv(DIVIDEND_CACHE_FILE, index=False, encoding="utf-8-sig")
+    print(f"      ✅ 分红预加载完成，耗时: {time.perf_counter() - start_time:.2f}s")
+    return df_cache
 
 def get_macd_status_left(dif, dea, hist, prev_hist):
     """
@@ -83,7 +131,7 @@ def extract_dividend_per_share(text):
     if match: return float(match.group(1)) / 10.0
     return 0.0
 
-def calculate_stock_dividend(symbol: str, close_price: float) -> float:
+def calculate_stock_dividend(symbol: str):
     start_time = time.perf_counter()
     try:
         clean_symbol = symbol.split('.')[0]
@@ -102,8 +150,9 @@ def calculate_stock_dividend(symbol: str, close_price: float) -> float:
         total_dividend = recent_df['每股分红'].sum()
         
         elapsed = time.perf_counter() - start_time
-        print(f"  [Timer] Akshare股票分红接口耗时 ({symbol}): {elapsed:.2f}s")
-        return round((total_dividend / close_price) * 100, 4)   
+        print(f"  [Timer] Akshare股票分红接口耗时 ({symbol}): {elapsed:.2f}s : {total_dividend}")
+        return total_dividend;
+        # return round((total_dividend / close_price) * 100, 4)   
     except: return 0.0
 
 def extract_dividend(value):
@@ -145,7 +194,7 @@ def get_rsi_status(val):
 # ==========================================
 # 2. 核心数据获取
 # ==========================================
-def get_stock_data(symbol, info):
+def get_stock_data(symbol, info, dividend_df=None):
     name = info["name"]
     asset_type = info["type"]
     should_calc_dy = info["calc_dy"]
@@ -178,7 +227,7 @@ def get_stock_data(symbol, info):
         prev_d = df_daily.iloc[-2]
         last_w = df_weekly.iloc[-1]
         prev_w = df_weekly.iloc[-2]
-        cp = last_d['close']
+        close_price = last_d['close']
 
 
         # 获取左侧 MACD 状态
@@ -189,21 +238,45 @@ def get_stock_data(symbol, info):
         # 股息率指标
         dy_display = "N/A"
         if should_calc_dy:
-            if asset_type == "stock":
-                close_price = last_d['close']
-                dy_val = calculate_stock_dividend(symbol, close_price)
-            else: # etf
-                dy_val = calculate_etf_dividend(symbol)
-            dy_display = f"{dy_val:.2f}%"
+            found_in_cache = False
+            if dividend_df is not None:
+                # 从预加载的 DataFrame 中匹配
+                match = dividend_df[dividend_df["代码"] == symbol]
+                if not match.empty:
+                    row = match.iloc[0]
+                    # 从缓存中取出纯数字
+                    cached_val = float(row["数值"])
+
+                    if asset_type == "stock":
+                       # 股票：缓存的是每股分红，需要除以当前现价
+                        dy_val = round((cached_val / close_price) * 100, 4)
+                    else:     
+                        # ETF：缓存直接就是百分比
+                        dy_val = cached_val
+                    
+                    dy_display = f"{dy_val:.2f}%"
+                    found_in_cache = True
+            
+            if not found_in_cache:
+                # 兜底方案：实时查询
+                print(f"      [!] {name} 缓存失效，正在实时查询...")
+                if asset_type == "stock":
+                    close_price = last_d['close']
+                    total_dividend = calculate_stock_dividend(symbol)
+                    dy_val = round((total_dividend / close_price) * 100, 4)
+                else:
+                    dy_val = calculate_etf_dividend(symbol)
+                dy_display = f"{dy_val:.2f}%"
+
 
         res = {
             "代码": symbol, "名称": name, 
-            "收盘价": f"{cp:.3f}",
+            "收盘价": f"{close_price:.3f}",
             "股息率": dy_display,
-            "120日线": f"{'✔' if cp < last_d['MA120'] else '✘'} ({last_d['MA120']:.2f})",
-            "250日线": f"{'✔' if cp < last_d['MA250'] else '✘'} ({last_d['MA250']:.2f})",
-            "日中下轨": f"{'✔' if cp < last_d['boll_mid'] else '✘'} ({last_d['boll_mid']:.2f}-{last_d['boll_low']:.2f})",
-            "周中下轨": f"{'✔' if cp < last_w['boll_mid'] else '✘'} ({last_w['boll_mid']:.2f}-{last_w['boll_low']:.2f})",
+            "120日线": f"{'✔' if close_price < last_d['MA120'] else '✘'} ({last_d['MA120']:.2f})",
+            "250日线": f"{'✔' if close_price < last_d['MA250'] else '✘'} ({last_d['MA250']:.2f})",
+            "日中下轨": f"{'✔' if close_price < last_d['boll_mid'] else '✘'} ({last_d['boll_mid']:.2f}-{last_d['boll_low']:.2f})",
+            "周中下轨": f"{'✔' if close_price < last_w['boll_mid'] else '✘'} ({last_w['boll_mid']:.2f}-{last_w['boll_low']:.2f})",
             "12日RSI": get_rsi_status(calculate_rsi(df_daily['close'], 12).iloc[-1]),
             "6周RSI": get_rsi_status(calculate_rsi(df_weekly['close'], 6).iloc[-1]),
             "日MACD": day_macd_text,
@@ -221,10 +294,16 @@ def get_stock_data(symbol, info):
 def run_daily_task():
     # STOCK_POOL 定义...
     start = time.perf_counter()
+
+    # A. 并行预加载分红数据（这一步由于使用了多线程，20只票可能只需几秒）
+    dividend_df = preload_all_dividends()
+
+    # B. 串行处理 K 线数据（受 12 秒限制）
     results = []
     for symbol, info in STOCK_POOL.items():
-        data = get_stock_data(symbol, info) # 使用你原始的计算函数
+        data = get_stock_data(symbol, info, dividend_df) # 使用你原始的计算函数
         if data: results.append(data)
+        # 这里的 12 秒只针对 TickFlow 接口，由于分红已读缓存，循环变得非常清爽
         time.sleep(12)
     
     print(f"  股票分析完成耗时: {time.perf_counter() - start:.4f}s")
