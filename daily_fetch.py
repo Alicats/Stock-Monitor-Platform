@@ -7,8 +7,8 @@ import datetime
 from tickflow import TickFlow
 from concurrent.futures import ThreadPoolExecutor
 
-from quant_logic import calculate_stock_dividend
-print("导入成功！")
+# from quant_logic import calculate_stock_dividend
+# print("导入成功！")
 
 STOCK_POOL = {
     "601988.SH": {"name": "中国银行", "type": "stock", "calc_dy": True},
@@ -290,11 +290,11 @@ def run_daily_task():
 
     # B. 串行处理 K 线数据（受 12 秒限制）
     results = []
-    # for symbol, info in STOCK_POOL.items():
-    #     data = get_stock_data(symbol, info, dividend_df) # 使用你原始的计算函数
-    #     if data: results.append(data)
-    #     # 这里的 12 秒只针对 TickFlow 接口，由于分红已读缓存，循环变得非常清爽
-    #     time.sleep(12)
+    for symbol, info in STOCK_POOL.items():
+        data = get_stock_data(symbol, info, dividend_df) # 使用你原始的计算函数
+        if data: results.append(data)
+        # 这里的 12 秒只针对 TickFlow 接口，由于分红已读缓存，循环变得非常清爽
+        time.sleep(12)
     
     print(f"  股票分析完成耗时: {time.perf_counter() - start:.4f}s")
 
