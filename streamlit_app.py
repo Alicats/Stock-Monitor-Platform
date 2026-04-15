@@ -34,11 +34,12 @@ def toggle_favorite_and_refresh(code):
     st.rerun()
 
 # --- 2. 样式处理工具 ---
-def wrap_cell(content, color="#31333F", bold=False, font_size="14px"):
-    """统一的单元格容器，确保高度和对齐一致"""
-    weight = "bold" if bold else "normal"
+def wrap_cell(content, color="#31333F", bold=False, font_size="14px", is_header=False):
+    """统一单元格容器。is_header 用于处理静态表头的特殊样式"""
+    weight = "600" if (bold or is_header) else "normal"
+    extra_class = "static-header" if is_header else ""
     return f"""
-    <div class="cell-container" style="color:{color}; font-weight:{weight}; font-size:{font_size};">
+    <div class="cell-container {extra_class}" style="color:{color}; font-weight:{weight}; font-size:{font_size};">
         {content}
     </div>
     """
@@ -64,13 +65,11 @@ def format_indicator(val):
 @st.cache_data(ttl=600)
 def load_and_preprocess_data():
     try:
-        # 模拟数据或读取CSV
         df = pd.read_csv("data.csv")
         if '类型' not in df.columns:
             df['类型'] = df['代码'].apply(lambda x: "ETF" if str(x).startswith(('5', '1')) else "股票")
         return df
     except:
-        # 返回空数据结构防止报错
         return pd.DataFrame(columns=['代码', '名称', '评分', '收盘价', '股息率', '120日线', '250日线', '日中下轨', '周中下轨', '日MACD', '周MACD', '类型'])
 
 def process_sorting(df):
@@ -89,12 +88,17 @@ def process_sorting(df):
     return temp_df
 
 def render_modern_header(label, prefix, is_sortable=True):
-    icon = ""
-    if is_sortable and st.session_state.sort_col == label:
-        icon = " 🔽" if st.session_state.sort_order == 1 else " 🔼"
-    
-    if st.button(f"{label}{icon}", key=f"{prefix}_h_{label}", use_container_width=True):
-        if is_sortable:
+    """
+    重写表头渲染：
+    只有指定的字段（is_sortable=True）才渲染为按钮，否则渲染为静态 Markdown 容器
+    """
+    if is_sortable:
+        icon = ""
+        if st.session_state.sort_col == label:
+            icon = " 🔽" if st.session_state.sort_order == 1 else " 🔼"
+        
+        # 仅针对 评分 和 股息率 保留按钮，点击会触发 st.rerun
+        if st.button(f"{label}{icon}", key=f"{prefix}_h_{label}", use_container_width=True):
             if st.session_state.sort_col == label:
                 st.session_state.sort_order = (st.session_state.sort_order + 1) % 3
                 if st.session_state.sort_order == 0: st.session_state.sort_col = None
@@ -102,13 +106,15 @@ def render_modern_header(label, prefix, is_sortable=True):
                 st.session_state.sort_col = label
                 st.session_state.sort_order = 1
             st.rerun()
+    else:
+        # 其他表头渲染为静态 HTML，不产生点击交互，不回传服务器
+        st.markdown(wrap_cell(label, color="#94a3b8", font_size="13px", is_header=True), unsafe_allow_html=True)
 
 def render_modern_table(df_to_show, prefix="market"):
     if df_to_show.empty:
         st.info("💡 暂无匹配数据")
         return
 
-    # 定义列宽比例
     col_ratios = [0.6, 1.0, 1.2, 0.7, 0.8, 1.0, 0.9, 0.9, 0.9, 0.9, 1.0, 1.0, 0.6]
     
     # 渲染表头
@@ -131,29 +137,23 @@ def render_modern_table(df_to_show, prefix="market"):
         code = row['代码']
         is_fav = code in st.session_state.fav_set
         
-        # 1. 自选按钮
         with r[0]:
             star_icon = "★" if is_fav else "☆"
-            btn_color = "#f59e0b" if is_fav else "#94a3b8"
             if st.button(star_icon, key=f"{prefix}_fav_{code}", use_container_width=True):
                 toggle_favorite_and_refresh(code)
 
-        # 2. 基本信息
         r[1].markdown(wrap_cell(code, bold=True), unsafe_allow_html=True)
         r[2].markdown(wrap_cell(row['名称'], color="#64748b", font_size="13px"), unsafe_allow_html=True)
 
-        # 3. 核心指标
         r[3].markdown(wrap_cell(f"<span class='score-pill'>{row['评分']}</span>"), unsafe_allow_html=True)
         r[4].markdown(wrap_cell(row.get('收盘价', '-')), unsafe_allow_html=True)
         r[5].markdown(wrap_cell(row.get('股息率', '-'), color="#f59e0b", bold=True), unsafe_allow_html=True)
         
-        # 4. 技术指标
         indicators = ['120日线', '250日线', '日中下轨', '周中下轨', '日MACD', '周MACD']
         for i, field in enumerate(indicators):
             val = str(row[field]) if field in row else "-"
             r[i+6].markdown(format_indicator(val), unsafe_allow_html=True)
         
-        # 5. 分析按钮
         with r[12]:
             if st.button("📝", key=f"{prefix}_ana_{code}", use_container_width=True):
                 st.toast(f"加载 {code} 的分析报告...")
@@ -161,7 +161,7 @@ def render_modern_table(df_to_show, prefix="market"):
 def inject_modern_css():
     st.markdown("""
         <style>
-        /* 强制隐藏 Streamlit 默认的按钮边框和背景 */
+        /* 1. 按钮基础样式（仅针对需要点击的按钮） */
         div[data-testid="stColumn"] button {
             border: 1px solid #e2e8f0 !important;
             background-color: transparent !important;
@@ -174,12 +174,12 @@ def inject_modern_css():
             transition: all 0.2s;
         }
         
-        /* 表头按钮特殊样式 */
+        /* 2. 可点击表头按钮样式 */
         div[data-testid="stColumn"] button[key*="_h_"] {
             border: none !important;
             font-size: 13px !important;
-            color: #94a3b8 !important;
-            font-weight: 600 !important;
+            color: #475569 !important; /* 排序字段颜色深一点提示可点 */
+            font-weight: 700 !important;
         }
 
         div[data-testid="stColumn"] button:hover {
@@ -187,19 +187,25 @@ def inject_modern_css():
             border-color: #cbd5e1 !important;
         }
 
-        /* 统一的单元格容器：关键对齐逻辑 */
+        /* 3. 统一对齐容器 */
         .cell-container {
             height: 42px;
             display: flex;
             align-items: center;
             justify-content: center;
             text-align: center;
-            border-bottom: 1px solid #f1f5f9; /* 用边框代替分割线，减少间隙误差 */
+            border-bottom: 1px solid #f1f5f9;
             width: 100%;
             overflow: hidden;
         }
+        
+        /* 4. 静态表头特有样式：去掉下划线防止视觉干扰，设置淡色 */
+        .static-header {
+            border-bottom: none !important;
+            cursor: default; /* 改回普通光标 */
+            user-select: none;
+        }
 
-        /* 评分药丸样式 */
         .score-pill {
             background: #f1f5f9;
             padding: 2px 8px;
@@ -209,18 +215,7 @@ def inject_modern_css():
             color: #475569;
         }
 
-        /* 消除 Markdown 默认边距 */
-        .stMarkdown div p {
-            margin-bottom: 0 !important;
-        }
-        
-        /* 调整 Tab 样式 */
-        .stTabs [data-baseweb="tab-list"] { gap: 8px; }
-        .stTabs [data-baseweb="tab"] {
-            padding: 8px 16px;
-            background-color: #f8fafc;
-            border-radius: 8px 8px 0 0;
-        }
+        .stMarkdown div p { margin-bottom: 0 !important; }
         </style>
     """, unsafe_allow_html=True)
 
