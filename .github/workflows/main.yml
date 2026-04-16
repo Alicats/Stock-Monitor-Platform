@@ -14,7 +14,7 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install dependencies
-        run: pip install pandas akshare tickflow
+        run: pip install -r requirements.txt
       - name: Run fetch script
         env:
           TICKFLOW_API_KEY: ${{ secrets.TICKFLOW_API_KEY }}
@@ -23,6 +23,11 @@ jobs:
         run: |
           git config --global user.name "actions-user"
           git config --global user.email "actions@github.com"
-          git add data.csv
-          git commit -m "Auto update data.csv" || exit 0
-          git push
+          git add data.csv dividend_cache.csv
+          # 检查是否有文件变更，避免空提交报错
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Auto update data and cache [skip ci]"
+            git push
+          fi
