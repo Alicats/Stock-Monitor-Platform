@@ -2,5 +2,6 @@ streamlit
 pandas
 tickflow
 akshare
+tushare
 # 下面这一行告诉系统去本地路径安装你的私有包
 ./libs/quant_logic-0.8-py3-none-any.whl

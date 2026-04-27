@@ -4,12 +4,10 @@ import time
 import datetime
 from concurrent.futures import ThreadPoolExecutor
 
-from quant_logic import get_full_analysis, calculate_stock_dividend, calculate_etf_dividend
+from quant_logic import get_full_analysis
 
 STOCK_POOL = {
     "601988.SH": {"name": "中国银行", "type": "stock", "calc_dy": True},
-    "513530.SH": {"name": "港股红利ETF", "type": "etf", "calc_dy": True},
-    "159941.SZ": {"name": "纳指ETF", "type": "etf", "calc_dy": False},
     "600900.SH": {"name": "长江电力", "type": "stock", "calc_dy": True},
     "601066.SH": {"name": "中信建投", "type": "stock", "calc_dy": True},
     "600886.SH": {"name": "国投电力", "type": "stock", "calc_dy": True},
@@ -29,52 +27,13 @@ STOCK_POOL = {
 }
 
 
+EIP_POOL = {
+    "513530.SH": {"name": "港股红利ETF", "type": "etf", "calc_dy": True},
+    "159941.SZ": {"name": "纳指ETF", "type": "etf", "calc_dy": False},
+}
 
-DIVIDEND_CACHE_FILE = "dividend_cache.csv"
+
 RESULT_FILE = "data.csv"
-
-
-# ==========================================
-# 1. 分红预加载逻辑 
-# ==========================================
-def preload_all_dividends():
-    """
-    预加载分红数据并缓存。
-    """
-    if os.path.exists(DIVIDEND_CACHE_FILE):
-        mtime = os.path.getmtime(DIVIDEND_CACHE_FILE)
-        modify_date = datetime.datetime.fromtimestamp(mtime).date()
-        if modify_date == datetime.date.today():
-            try:
-                df_cache = pd.read_csv(DIVIDEND_CACHE_FILE, encoding="utf-8-sig")
-                if not df_cache.empty:
-                    print(f"🕒 检测到今日分红缓存 ({modify_date})，直接加载。")
-                    return df_cache
-            except Exception:
-                pass
-
-    print("🚀 正在并行抓取分红数据（今日首次运行）...")
-    
-    def fetch_unit(item):
-        symbol, info = item
-        if not info["calc_dy"]: return None
-        try:
-            if info["type"] == "stock":
-                val = calculate_stock_dividend(symbol)
-            else:
-                val = calculate_etf_dividend(symbol)
-            return {"代码": symbol, "股息率": val}
-        except Exception as e:
-            print(f"  [!] {symbol} 分红抓取失败: {e}")
-            return None
-
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        results = list(executor.map(fetch_unit, STOCK_POOL.items()))
-
-    valid_res = [r for r in results if r]
-    df_cache = pd.DataFrame(valid_res)
-    df_cache.to_csv(DIVIDEND_CACHE_FILE, index=False, encoding="utf-8-sig")
-    return df_cache
 
 
 # ==========================================
@@ -84,37 +43,37 @@ def run_daily_analysis():
     start_all = time.perf_counter()
     print("=== 量化策略扫描启动 ===")
     
-    # A. 准备分红数据
-    dividend_df = preload_all_dividends()
+    results = []
     
-    final_results = []
-    
-    # B. 串行扫描 (遵循 TickFlow 的 12s 限制)
-    for symbol, info in STOCK_POOL.items():
-        name = info["name"]
-        print(f"🔎 正在处理: {name} ({symbol})...")
+    # 1. 提交所有任务，不要在提交时立即 get result()
+    with ThreadPoolExecutor(max_workers=5) as stock_executor, \
+        ThreadPoolExecutor(max_workers=1) as eip_executor:
         
-        try:
-            # 匹配该标的分红率
-            dy_match = dividend_df[dividend_df["代码"] == symbol]
-            current_dy = float(dy_match.iloc[0]["股息率"]) if not dy_match.empty else None
-            
-            # 获取数据
-            analysis_data = get_full_analysis(symbol, info, current_dy)
-            
-            if analysis_data:
-                final_results.append(analysis_data)
-                print(f"   ✅ 完成评分: {analysis_data.get('评分', 0)}")
-            
-        except Exception as e:
-            print(f"   ❌ {name} 扫描发生异常: {e}")
+        # 提交股票池任务 (并行)
+        stock_futures = [stock_executor.submit(get_full_analysis, s, i) for s, i in STOCK_POOL.items()]
 
-        # 严格遵守数据源频率限制
-        time.sleep(12)
+        # 提交 EIP 池任务 (串行提交，带 15s 延迟)
+        eip_futures = []
+        for symbol, info in EIP_POOL.items():
+            f = eip_executor.submit(get_full_analysis, symbol, info)
+            eip_futures.append(f)
+            # 注意：这里的 sleep(15) 会让主线程停 15s 再提交下一个 EIP 任务
+            # 从而实现 EIP 每只股票间隔 15s 的需求
+            time.sleep(15) 
+
+        # 2. 统一收集结果
+        for f in stock_futures:
+            res = f.result()
+            if res: results.append(res); print(f"✅ [STOCK] {res['名称']} (评分: {res['评分']})")
+
+        for f in eip_futures:
+            res = f.result()
+            if res: results.append(res); print(f"✅ [EIP] {res['名称']} (评分: {res['评分']})")
+
 
     # C. 结果持久化
-    if final_results:
-        df_final = pd.DataFrame(final_results)
+    if results:
+        df_final = pd.DataFrame(results)
             
         df_final.to_csv(RESULT_FILE, index=False, encoding="utf-8-sig")
         print("-" * 30)
