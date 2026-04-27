@@ -115,16 +115,16 @@ def render_modern_table(df_to_show, prefix="market"):
         st.info("💡 暂无匹配数据")
         return
 
-    col_ratios = [0.6, 1.0, 1.2, 0.7, 0.8, 1.0, 0.9, 0.9, 0.9, 0.9, 1.0, 1.0, 0.6]
+    col_ratios = [0.6, 1.0, 1.2, 0.7, 0.8, 1.0, 0.9, 0.9, 0.9, 0.9, 0.9, 1.0, 1.0, 0.6]
     
     # 渲染表头
     h_cols = st.columns(col_ratios)
     header_config = {
         0: ("自选", False), 1: ("代码", False), 2: ("名称", False),
         3: ("评分", True),  4: ("现价", False), 5: ("股息率", True),
-        6: ("120日", False), 7: ("250日", False), 8: ("日布林", False),
-        9: ("周布林", False), 10: ("日MACD", False), 11: ("周MACD", False),
-        12: ("分析", False)
+        6: ("120日", False), 7: ("250日", False), 8: ("日中下轨", False),
+        9: ("周中下轨", False), 10: ("月中下轨", False), 11: ("日MACD", False), 
+        12: ("周MACD", False), 13: ("分析", False)
     }
 
     for idx, (label, sortable) in header_config.items():
@@ -149,7 +149,7 @@ def render_modern_table(df_to_show, prefix="market"):
         r[4].markdown(wrap_cell(row.get('收盘价', '-')), unsafe_allow_html=True)
         r[5].markdown(wrap_cell(row.get('股息率', '-'), color="#f59e0b", bold=True), unsafe_allow_html=True)
         
-        indicators = ['120日线', '250日线', '日中下轨', '周中下轨', '日MACD', '周MACD']
+        indicators = ['120日线', '250日线', '日中下轨', '周中下轨', '月中下轨', '日MACD', '周MACD']
         for i, field in enumerate(indicators):
             val = str(row[field]) if field in row else "-"
             r[i+6].markdown(format_indicator(val), unsafe_allow_html=True)
