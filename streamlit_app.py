@@ -204,7 +204,7 @@ def render_modern_table(all_data, prefix="market"):
     header_config = {
         0: ("自选", False), 1: ("代码", False), 2: ("名称", False), 3: ("评分", True),  
         4: ("现价", False), 5: ("股息率", True), 6: ("120日", False), 7: ("250日", False), 
-        8: ("日中轨", False), 9: ("周中轨", False), 10: ("月中轨", False), 11: ("日MACD", False), 
+        8: ("日中下轨", False), 9: ("周中下轨", False), 10: ("月中下轨", False), 11: ("日MACD", False), 
         12: ("周MACD", False), 13: ("分析", False)
     }
 
@@ -225,7 +225,6 @@ def render_modern_table(all_data, prefix="market"):
                 is_fav = code in st.session_state.fav_set
                 star_icon = "★" if is_fav else "☆"
                 if st.button(star_icon, key=f"{prefix}_fav_{code}_{index}"):
-                    # print(f"DEBUG - 点击了 {st.session_state.user_email} {code}")
                     toggle_favorite(st.session_state.user_email, code)
                     st.session_state.fav_set = get_user_favorites(st.session_state.user_email)
                     st.rerun()
@@ -308,9 +307,6 @@ def main():
     # 剩下的逻辑要根据 session_state 来展示
     if not st.session_state.get('logged_in'):
         st.info("👋 请在左侧菜单登录后查看完整监控数据")
-    #     # render_modern_table(...)
-    # else:
-    #     st.info("👋 请在左侧菜单登录后查看完整监控数据")
 
     # 2. 初始化排序状态
     if 'sort_order' not in st.session_state: st.session_state.sort_order = 0
